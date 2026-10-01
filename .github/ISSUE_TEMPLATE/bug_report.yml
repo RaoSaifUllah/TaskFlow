@@ -1,0 +1,9 @@
+name: Bug report
+description: Report reproducible incorrect behavior without private data
+body:
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps, expected behavior, actual behavior and version
+    validations:
+      required: true

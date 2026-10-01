@@ -1,0 +1,8 @@
+{
+  "name": "taskflow",
+  "private": true,
+  "version": "0.1.0",
+  "workspaces": ["Frontend"],
+  "scripts": {"build": "npm run build --workspace taskflow-web", "test:e2e": "npm run test:e2e --workspace taskflow-web"},
+  "devDependencies": {"@playwright/test": "1.63.0"}
+}
