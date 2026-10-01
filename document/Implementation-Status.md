@@ -166,3 +166,5 @@ User requested stopping implementation and pushing a checkpoint for tomorrow.
 - Remote/push awaits repository URL. Public publication also awaits license confirmation. Ignored development settings, signing/protection keys, temporary DB credentials and generated artifacts must remain excluded.
 
 - Owner supplied the GitHub URL and confirmed AGPL-3.0-only. Destination is an empty public repository. Checkpoint publication authorized; no external application deployment authorized. Added official GNU AGPL v3 license text. No further feature work performed.
+
+- Owner requires local checks and direct Git pushes; no GitHub Actions for pushes or merges. Removed push/pull_request workflow triggers and disabled the GitHub workflow. Canceled the queued checkpoint run. Workflow source retained for possible explicitly authorized manual use; no further automated runs initiated.
