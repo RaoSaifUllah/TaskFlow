@@ -16,7 +16,7 @@ public sealed class WorkspaceService(TaskFlowDbContext db, IWorkspaceRepository 
             await db.Memberships.AnyAsync(x => x.UserId == actor.UserId && x.Active && x.Role != WorkspaceRole.Guest, ct);
         if (!allowed) throw new WorkspaceRejectedException("workspace_creation_denied");
         var workspace = new Workspace(name);
-        await unit.ExecuteAsync(_ => { repository.Add(workspace, new Membership { WorkspaceId = workspace.Id, UserId = actor.UserId, Role = WorkspaceRole.Owner }); return Task.CompletedTask; }, ct);
+        await unit.ExecuteAsync(_ => { repository.Add(workspace, new Membership { WorkspaceId = workspace.Id, UserId = actor.UserId, Role = WorkspaceRole.Owner }); db.Audit("workspace_created",actor.UserId,workspace.Id,clock.GetUtcNow(),workspace.Id); return Task.CompletedTask; }, ct);
         return workspace.Id;
     }
     public async Task AuthorizeReadAsync(RequestActor actor, Guid workspaceId, bool directory, CancellationToken ct)
@@ -41,7 +41,44 @@ public sealed class WorkspaceService(TaskFlowDbContext db, IWorkspaceRepository 
             if (target.Active && target.Role == WorkspaceRole.Owner && (!active || role != WorkspaceRole.Owner) && await repository.OwnersAsync(workspaceId, token) <= 1)
                 throw new WorkspaceRejectedException("last_owner", 409);
             target.Role = role; target.Active = active;
+            db.Audit("membership_changed",actor.UserId,userId,clock.GetUtcNow(),workspaceId);
         }, ct);
+    }
+    public async Task AuthorizeManagementAsync(RequestActor actor, Guid workspaceId, WorkspaceRole grantingRole, CancellationToken ct)
+    {
+        var caller = await repository.MemberAsync(workspaceId, actor.UserId, ct);
+        if (caller is null || !caller.Active) throw new WorkspaceRejectedException("workspace_not_found", 404);
+        if (caller.Role is not (WorkspaceRole.Owner or WorkspaceRole.Admin)) throw new WorkspaceRejectedException("member_change_denied");
+        if (caller.Role == WorkspaceRole.Admin && grantingRole == WorkspaceRole.Owner) throw new WorkspaceRejectedException("ownership_denied");
+        await RequireMfaAsync(actor, true, ct);
+    }
+    public async Task RenameAsync(RequestActor actor, Guid workspaceId, string name, long? version, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(name) || name.Trim().Length > 120) throw new WorkspaceRejectedException("invalid_name",400);
+        await unit.ExecuteAsync(async cancellation =>
+        {
+            var workspace=await repository.LockAsync(workspaceId,cancellation) ?? throw new WorkspaceRejectedException("workspace_not_found",404);
+            await AuthorizeManagementAsync(actor,workspaceId,WorkspaceRole.Member,cancellation);
+            CheckVersion(workspace,version); workspace.Rename(name);
+            db.Audit("workspace_renamed",actor.UserId,workspaceId,clock.GetUtcNow(),workspaceId);
+        },ct);
+    }
+    public async Task DeleteAsync(RequestActor actor, Guid workspaceId, long? version, CancellationToken ct)
+    {
+        await unit.ExecuteAsync(async cancellation =>
+        {
+            var workspace=await repository.LockAsync(workspaceId,cancellation) ?? throw new WorkspaceRejectedException("workspace_not_found",404);
+            await AuthorizeManagementAsync(actor,workspaceId,WorkspaceRole.Owner,cancellation);
+            CheckVersion(workspace,version); workspace.Delete(clock.GetUtcNow());
+            db.Audit("workspace_deleted",actor.UserId,workspaceId,clock.GetUtcNow(),workspaceId);
+            // Keep referential history while withdrawing every membership and outstanding invite.
+            await db.Memberships.Where(x=>x.WorkspaceId==workspaceId && x.Active).ExecuteUpdateAsync(x=>x.SetProperty(m=>m.Active,false),cancellation);
+        },ct);
+    }
+    private static void CheckVersion(Workspace workspace,long? version)
+    {
+        if(version is null) throw new WorkspaceRejectedException("version_required",428);
+        if(version != workspace.Version) throw new WorkspaceRejectedException("version_conflict",409);
     }
     private async Task RequireMfaAsync(RequestActor actor, bool recent, CancellationToken ct)
     {

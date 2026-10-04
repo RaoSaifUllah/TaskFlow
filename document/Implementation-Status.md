@@ -1,6 +1,6 @@
 # Implementation status
 
-Updated 2026-10-01, Asia/Karachi. **TaskFlow v1 is incomplete and not release-ready.**
+Updated 2026-10-04, Asia/Karachi. **TaskFlow v1 is incomplete and not release-ready.**
 All changes are confined to TaskFlow. No Git repository/remote, push, external
 deployment or live notification delivery was performed. License is unconfirmed.
 
@@ -8,7 +8,7 @@ deployment or live notification delivery was performed. License is unconfirmed.
 |---|---|---|
 | 0 Baseline | Implemented; credential incident remediation pending | SDK/packages pinned, solution/docs/config/locks, clean-source locked restore and both builds pass; credential rotation required below |
 | 1 Architecture/database | Completed foundation gates | Real PostgreSQL migration up/down/up, isolation/SELECT-only/concurrency tests pass; layered builds and responsive shell verified |
-| 2 Identity/workspaces | In progress | Identity/Argon2id, JWT rotation validation, refresh replay/CSRF/session revocation, protected TOTP/hashed recovery, one-time bootstrap and account screens implemented; reset/verification/invites/workspace/member flows pending |
+| 2 Identity/workspaces | In progress | Identity/Argon2id, JWT rotation validation, refresh replay/CSRF/session revocation, protected TOTP/hashed recovery, one-time bootstrap and account screens implemented; workspace/member/session flows, single-use invitations, reset/verification, audit and persisted OTP replay guard added; complete live browser journeys and release hardening remain pending |
 | 3 Project/task core | Not started | Initial persistence model only; no CRUD use cases/UI |
 | 4 Quick Add/recurrence | Not started | No parser or recurrence claims |
 | 5 Collaboration/providers | Not started | No delivery, scanner or provider contract claims |
@@ -168,3 +168,38 @@ User requested stopping implementation and pushing a checkpoint for tomorrow.
 - Owner supplied the GitHub URL and confirmed AGPL-3.0-only. Destination is an empty public repository. Checkpoint publication authorized; no external application deployment authorized. Added official GNU AGPL v3 license text. No further feature work performed.
 
 - Owner requires local checks and direct Git pushes; no GitHub Actions for pushes or merges. Removed push/pull_request workflow triggers and disabled the GitHub workflow. Canceled the queued checkpoint run. Workflow source retained for possible explicitly authorized manual use; no further automated runs initiated.
+
+## Resumed Phase 2 — 2026-10-04
+- Wired workspace repository/service/scoped Dapper projections and protected API routes into DI/routing. Owner/admin reads require MFA assurance; membership mutations require a current TOTP-verified session within five minutes. Workspace row lock serializes ownership changes; membership entities reload before authoritative checks. New PostgreSQL tests cover simultaneous owner demotions, cross-workspace/guest directory exclusion, expired step-up and revoked sessions. **Database execution remains unverified.**
+- Added workspace/member/session screen with scope-cleared member state, sensitive-change errors, workspace creation, MFA step-up and device revocation. Member display currently uses IDs; a restricted directory projection with friendly names and invitation/reset/verification workflows remain pending.
+- Bounded auth request bodies to 8 KiB and auth concurrency to four requests globally; database exceptions return redacted RFC 9457 503 responses. Local HTTP contract verifies oversized payload rejection before auth, concurrency 429/Retry-After and redacted unavailable errors with correlation ID.
+- `dotnet build backend/TaskFlow.slnx --no-restore`: passed, 0 warnings/errors.
+- `npm run build`: passed; TypeScript checks application/config/browser tests.
+- `dotnet test backend/tests/TaskFlow.UnitTests --no-restore`: 11 passed, 0 skipped.
+- `dotnet test backend/tests/TaskFlow.IntegrationTests --no-restore --filter FullyQualifiedName~AuthBoundaryTests`: 1 passed, 0 skipped (1 second); local synthetic service, no live database/provider.
+- `npm exec --workspace taskflow-web -- playwright test --reporter=line`: 8 passed (4.4 seconds), desktop/mobile focus/theme/navigation, guest directory omission, no browser token persistence, failed logout remains visibly authenticated. Settings/auth responses in new journeys are mocked; these do not verify live login or database permissions. Initial mobile fixture failed because navigation was collapsed; fixture now opens the mobile menu before selecting settings. Windows sandbox process teardown stalled earlier attempts; authorized local process execution completed successfully.
+- `pwsh -NoProfile -File scripts/Test-Postgres.ps1`: 5 passed, 7 failed, 0 skipped (8 seconds). Database-dependent failures are SQLSTATE 28P01 authentication failure. Both saved Migration/Write and the previously supplied temporary Neon owner connection were probed and also failed 28P01. No migrations/provisioning changes applied; development configuration preserved. Owner asked to update Migration locally; credential values never included here or in tracked files.
+- Phase 2 exit remains pending: restore working migration/test credentials, run real ownership/role/race tests, implement invites, registration, reset/verification and friendly member directory, then live auth/workspace/session journeys. Do not advance to Phase 3 until these gates pass. Provider contract tests await provider implementation in Phase 5.
+- Added .vs ignore. GitHub Actions stays disabled; changes remain local at this checkpoint, no external deployment or provider delivery.
+
+
+- Connection blocker resolved: owner supplied the new value under DefaultConnection. Successful empty-database probe, restricted-role/test-database provisioning, and full PostgreSQL suite **13 passed, 0 skipped (33 seconds)**. Saved credential values remain ignored. Worker runtime settings synchronized locally. Earlier authentication failures remain historical evidence above.
+- Added WorkspaceInvitations migration and invite-only registration/acceptance: seven-day hashed tokens, email match, creator-role revalidation, single-use consumption under workspace/invite row locks, concurrent registration serialized, no automatic outbound delivery. Authorized inviter receives token once for private manual sharing. Runtime migration/grants and disposable test migration up/down/up passed. Full PostgreSQL suite **14 passed, 0 skipped (33 seconds)**, including wrong-email, concurrent registration/replay, expiry and revoked-inviter checks.
+- New invitation UI and build passed. Remaining Phase 2 work: reset/verification, friendly directory, complete live registration/workspace/session journeys and security review. Phases 3–7 remain pending.
+
+## Phase 2 lifecycle/security follow-through — 2026-10-04
+- Added hashed reset/verification challenges with supersession, expiry, purpose checks, user-row serialization and session revocation on reset. Reset preserves MFA configuration. Local delivery is an ignored JSON mock, with no external calls; durable delivery/cleanup remains Phase 5/7 work.
+- Member IDs now display email from the minimal AccountDirectory view. Read role has no SELECT on identity, invitation/challenge or audit tables. Added membership-to-user FK and valid-role constraint; disposable test fixture reset before new FK, then up/down/up passed. No runtime rollback performed.
+- Added versioned workspace rename and owner-only logical deletion that atomically withdraws all memberships and outstanding invitation authority. 428 missing-version and 409 stale-version handling. Workspace lifecycle PostgreSQL tests pass.
+- Added sensitive-action audit records within mutation transactions, containing only IDs/action/time; runtime audit role can insert/read but cannot update/delete. Rollback on rejected ownership changes preserves audit atomicity. Audit retention/admin viewing remain operational follow-up.
+- Added local auth-setup DbTool mode for preserving/generating RSA keys, one-time bootstrap and local mock delivery paths. DefaultConnection is accepted as operational owner input; API/Worker continue to use generated restricted Write/Read credentials.
+- PostgreSQL full suite after workspace lifecycle/audit: **16 passed, 0 skipped (52 seconds)**. Expanded real HTTP fixture covers bootstrap, login, MFA enrollment and stamp revocation, restricted directory reads, owner guard, workspace creation and logout with secure cookies/Origin. It does not substitute for a full live browser journey.
+- Latest local browser check before OTP follow-through: **12 passed (4.7 seconds)**, includes masked invitation/reset fields and accepted nonenumerating reset request. Frontend TypeScript/Vite build passed.
+- Review found Identity TOTP verification does not itself persist accepted steps. ADR-009 records using pinned Otp.NET 1.4.1 matched-window detection with per-authenticator-generation PostgreSQL replay records and a +/-1 window. NuGet primary metadata confirms stable 1.4.1; production dependency/locks updated. Enrollment/login/step-up share the guard and account lockout. Updated race/replay verification is running; do not yet claim it passed.
+- One overlapping full build failed due DbTool's Windows file lock (MSB3021/MSB3027); rerun sequentially after verification. No implementation behavior inferred from that tooling failure.
+- Release hardening remains unverified: production key protection/rotation/backup, distributed hash-load benchmark and nonenumeration timing review, full live browser journeys, exact ASVS applicability evidence and operational retention. No certification/security verification claim.
+
+
+- Final checkpoint verification: sequential full backend build passed with **0 warnings/errors**; PostgreSQL integration suite **16 passed, 0 skipped (54 seconds)**, including enrollment/login/step-up shared OTP replay rejection, concurrent one-success login and MFA enrollment, reset revocation and transactional ownership/audit checks. Unit suite **11 passed (134 ms)**. Frontend TypeScript/Vite build passed; final browser result recorded below. Phase 2 core is implemented; complete live browser journeys and release/security review remain pending. No Phase 3–7 implementation claimed. Owner requested direct Git push of this checkpoint on 2026-10-04; GitHub Actions remains disabled.
+
+- Final browser verification: **12 passed (4.9 seconds)**. Auth/workspace UI tests use local mocks; real HTTP and PostgreSQL tests are separate. Remaining Phase 2 evidence: a full live browser workflow and final permission/security review; Phase 3 project/task core is next after milestone exit review.

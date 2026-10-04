@@ -152,6 +152,36 @@ namespace TaskFlow.Infrastructure.Persistence.Migrations
                     b.ToTable("AspNetUserTokens", (string)null);
                 });
 
+            modelBuilder.Entity("TaskFlow.Domain.Operations.AuditEvent", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Action")
+                        .IsRequired()
+                        .HasMaxLength(80)
+                        .HasColumnType("character varying(80)");
+
+                    b.Property<Guid?>("ActorId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("ResourceId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid?>("WorkspaceId")
+                        .HasColumnType("uuid");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("WorkspaceId", "CreatedAt");
+
+                    b.ToTable("AuditEvents");
+                });
+
             modelBuilder.Entity("TaskFlow.Domain.Projects.Project", b =>
                 {
                     b.Property<Guid>("Id")
@@ -292,7 +322,12 @@ namespace TaskFlow.Infrastructure.Persistence.Migrations
 
                     b.HasKey("WorkspaceId", "UserId");
 
-                    b.ToTable("Memberships");
+                    b.HasIndex("UserId");
+
+                    b.ToTable("Memberships", null, t =>
+                        {
+                            t.HasCheckConstraint("CK_Membership_Role", "\"Role\" BETWEEN 0 AND 3");
+                        });
                 });
 
             modelBuilder.Entity("TaskFlow.Domain.Workspaces.Workspace", b =>
@@ -301,14 +336,116 @@ namespace TaskFlow.Infrastructure.Persistence.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("uuid");
 
+                    b.Property<DateTimeOffset?>("DeletedAt")
+                        .HasColumnType("timestamp with time zone");
+
                     b.Property<string>("Name")
                         .IsRequired()
                         .HasMaxLength(120)
                         .HasColumnType("character varying(120)");
 
+                    b.Property<long>("Version")
+                        .IsConcurrencyToken()
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint")
+                        .HasDefaultValue(1L);
+
                     b.HasKey("Id");
 
                     b.ToTable("Workspaces");
+                });
+
+            modelBuilder.Entity("TaskFlow.Domain.Workspaces.WorkspaceInvite", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTimeOffset?>("ConsumedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("CreatedBy")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTimeOffset>("ExpiresAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("NormalizedEmail")
+                        .IsRequired()
+                        .HasMaxLength(254)
+                        .HasColumnType("character varying(254)");
+
+                    b.Property<int>("Role")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("TokenHash")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
+
+                    b.Property<Guid>("WorkspaceId")
+                        .HasColumnType("uuid");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TokenHash")
+                        .IsUnique();
+
+                    b.HasIndex("WorkspaceId", "CreatedBy");
+
+                    b.ToTable("WorkspaceInvites", null, t =>
+                        {
+                            t.HasCheckConstraint("CK_Invite_Role", "\"Role\" BETWEEN 0 AND 3");
+                        });
+                });
+
+            modelBuilder.Entity("TaskFlow.Infrastructure.Identity.AccountChallenge", b =>
+                {
+                    b.Property<string>("Hash")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
+
+                    b.Property<DateTimeOffset?>("ConsumedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTimeOffset>("ExpiresAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<int>("Purpose")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("SecurityStamp")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)");
+
+                    b.Property<Guid>("UserId")
+                        .HasColumnType("uuid");
+
+                    b.HasKey("Hash");
+
+                    b.HasIndex("UserId", "Purpose");
+
+                    b.ToTable("AccountChallenges");
+                });
+
+            modelBuilder.Entity("TaskFlow.Infrastructure.Identity.AuthenticatorUse", b =>
+                {
+                    b.Property<Guid>("UserId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("Generation")
+                        .HasColumnType("uuid");
+
+                    b.Property<long>("Step")
+                        .HasColumnType("bigint");
+
+                    b.Property<DateTimeOffset>("AcceptedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("UserId", "Generation", "Step");
+
+                    b.ToTable("AuthenticatorUses");
                 });
 
             modelBuilder.Entity("TaskFlow.Infrastructure.Identity.RecoveryCode", b =>
@@ -410,6 +547,11 @@ namespace TaskFlow.Infrastructure.Persistence.Migrations
 
                     b.Property<bool>("Active")
                         .HasColumnType("boolean");
+
+                    b.Property<Guid>("AuthenticatorGeneration")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasDefaultValueSql("gen_random_uuid()");
 
                     b.Property<string>("ConcurrencyStamp")
                         .IsConcurrencyToken()
@@ -576,9 +718,42 @@ namespace TaskFlow.Infrastructure.Persistence.Migrations
 
             modelBuilder.Entity("TaskFlow.Domain.Workspaces.Membership", b =>
                 {
+                    b.HasOne("TaskFlow.Infrastructure.Identity.TaskFlowUser", null)
+                        .WithMany()
+                        .HasForeignKey("UserId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
                     b.HasOne("TaskFlow.Domain.Workspaces.Workspace", null)
                         .WithMany()
                         .HasForeignKey("WorkspaceId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("TaskFlow.Domain.Workspaces.WorkspaceInvite", b =>
+                {
+                    b.HasOne("TaskFlow.Domain.Workspaces.Membership", null)
+                        .WithMany()
+                        .HasForeignKey("WorkspaceId", "CreatedBy")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("TaskFlow.Infrastructure.Identity.AccountChallenge", b =>
+                {
+                    b.HasOne("TaskFlow.Infrastructure.Identity.TaskFlowUser", null)
+                        .WithMany()
+                        .HasForeignKey("UserId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("TaskFlow.Infrastructure.Identity.AuthenticatorUse", b =>
+                {
+                    b.HasOne("TaskFlow.Infrastructure.Identity.TaskFlowUser", null)
+                        .WithMany()
+                        .HasForeignKey("UserId")
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
                 });

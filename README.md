@@ -4,7 +4,7 @@ and small teams.
 
 Status: Phase 1 foundation verified; Phase 2 identity/workspace implementation in progress. TaskFlow v1 is incomplete.
 See [implementation evidence](document/Implementation-Status.md) and
-[local setup](document/Development.md). Authentication is partially implemented; workspace work is unfinished and task endpoints are pending.
+[local setup](document/Development.md). Account/workspace core is implemented and locally tested, including invitations, reset/verification, MFA replay prevention and session revocation. Complete live browser journeys and release hardening remain pending; task endpoints are not implemented.
 Independent repository: https://github.com/RaoSaifUllah/TaskFlow
 
 ## Read first
@@ -37,4 +37,5 @@ with secure platform token storage. Native development requires a separate scope
 and platform build/testing plan; iOS builds require macOS infrastructure.
 
 TaskFlow installs independently; no runtime dependency on NotifyHub.
+
 

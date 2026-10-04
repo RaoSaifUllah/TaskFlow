@@ -1,3 +1,5 @@
+using TaskFlow.Application.Workspaces;
+using TaskFlow.Infrastructure.Workspaces;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -44,7 +46,14 @@ public static class DependencyInjection
         services.AddScoped<IUserStore<TaskFlowUser>, ProtectedUserStore>();
         services.AddSingleton<JwtIssuer>();
         services.AddScoped<IAuthService, AuthService>();
+        services.AddScoped<AuthenticatorReplayGuard>();
         services.AddScoped<IAccountService, AccountService>();
+        services.AddScoped<IAccountLifecycle, AccountLifecycle>();
+        services.AddSingleton<IAccountMessageSink, LocalAccountMessageSink>();
+        services.AddScoped<IInviteService, InviteService>();
+        services.AddScoped<IWorkspaceRepository, WorkspaceRepository>();
+        services.AddScoped<IWorkspaceService, WorkspaceService>();
+        services.AddScoped<IWorkspaceReadService>(provider => new WorkspaceReadService(provider.GetRequiredService<IConfiguration>().GetConnectionString("Read") ?? throw new InvalidOperationException("ConnectionStrings:Read is required.")));
         services.AddScoped<ITaskRepository, TaskRepository>();
         services.AddScoped<IUnitOfWork, UnitOfWork>();
         services.AddScoped<ITaskReadService>(provider => new TaskReadService(provider.GetRequiredService<IConfiguration>()
@@ -53,3 +62,5 @@ public static class DependencyInjection
         return services;
     }
 }
+
+

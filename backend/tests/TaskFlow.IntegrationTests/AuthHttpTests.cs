@@ -8,6 +8,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.EntityFrameworkCore;
 using Npgsql;
+using OtpNet;
 using TaskFlow.Infrastructure.Persistence;
 
 namespace TaskFlow.IntegrationTests;
@@ -25,6 +26,7 @@ public sealed class AuthHttpTests
         await admin.OpenAsync();
         await using (var create = new NpgsqlCommand($"CREATE DATABASE \"{isolatedDatabase}\"", admin)) await create.ExecuteNonQueryAsync();
         builder.Database = isolatedDatabase;
+        var readBuilder = new NpgsqlConnectionStringBuilder(DatabaseConnections.Normalize(Environment.GetEnvironmentVariable("TASKFLOW_TEST_READ")!)) { Database = isolatedDatabase };
         var path = Path.Combine(AppContext.BaseDirectory, ".local", "http-test-" + Guid.NewGuid());
         Directory.CreateDirectory(path);
         var key = Path.Combine(path, "signing.pem");
@@ -33,13 +35,20 @@ public sealed class AuthHttpTests
         try
         {
             await using (var db = new TaskFlowDbContext(new DbContextOptionsBuilder<TaskFlowDbContext>().UseNpgsql(builder.ConnectionString).Options))
+            {
                 await db.Database.MigrateAsync();
+                var role = new NpgsqlCommandBuilder().QuoteIdentifier(readBuilder.Username!);
+                await using var permissions = new NpgsqlConnection(builder.ConnectionString);
+                await permissions.OpenAsync();
+                await using var permissionCommand = new NpgsqlCommand($"GRANT USAGE ON SCHEMA public TO {role}; GRANT SELECT ON \"Workspaces\", \"Memberships\", \"AccountDirectory\" TO {role}", permissions);
+                await permissionCommand.ExecuteNonQueryAsync();
+            }
             var bootstrap = Convert.ToHexString(RandomNumberGenerator.GetBytes(32));
             using var factory = new WebApplicationFactory<Program>().WithWebHostBuilder(host =>
                 host.UseEnvironment("Testing").ConfigureAppConfiguration((_, cfg) => cfg.AddInMemoryCollection(new Dictionary<string, string?>
                 {
                     ["ConnectionStrings:Write"] = builder.ConnectionString,
-                    ["ConnectionStrings:Read"] = Environment.GetEnvironmentVariable("TASKFLOW_TEST_READ"),
+                    ["ConnectionStrings:Read"] = readBuilder.ConnectionString,
                     ["Auth:SigningKeyPath"] = key,
                     ["Auth:DataProtectionKeyDirectory"] = Path.Combine(path, "protection"),
                     ["Auth:BootstrapToken"] = bootstrap, ["Auth:Origin"] = "https://localhost:5173",
@@ -78,6 +87,31 @@ public sealed class AuthHttpTests
             client.DefaultRequestHeaders.Remove("X-CSRF-Token");
             client.DefaultRequestHeaders.Add("X-CSRF-Token", grant.GetProperty("csrfToken").GetString());
             Assert.Equal(HttpStatusCode.OK, (await client.GetAsync("/api/v1/auth/sessions")).StatusCode);
+            var spaces = await client.GetFromJsonAsync<JsonElement>("/api/v1/workspaces/");
+            var workspaceId = spaces[0].GetProperty("id").GetGuid();
+            Assert.Equal(HttpStatusCode.Forbidden, (await client.GetAsync($"/api/v1/workspaces/{workspaceId}/members")).StatusCode);
+            var begin = await client.PostAsJsonAsync("/api/v1/auth/mfa/begin", new { password = credentials.password });
+            Assert.Equal(HttpStatusCode.OK, begin.StatusCode);
+            var secret = (await begin.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("secret").GetString();
+            var code = new Totp(Base32Encoding.ToBytes(secret!)).ComputeTotp(DateTime.UtcNow);
+            Assert.Equal(HttpStatusCode.OK, (await client.PostAsJsonAsync("/api/v1/auth/mfa/confirm", new { code })).StatusCode);
+            Assert.Equal(HttpStatusCode.Unauthorized, (await client.GetAsync("/api/v1/auth/sessions")).StatusCode);
+            client.DefaultRequestHeaders.Authorization = null;
+            var newCsrf = await client.GetFromJsonAsync<JsonElement>("/api/v1/auth/csrf");
+            client.DefaultRequestHeaders.Remove("X-CSRF-Token");
+            client.DefaultRequestHeaders.Add("X-CSRF-Token", newCsrf.GetProperty("csrfToken").GetString());
+            code=new Totp(Base32Encoding.ToBytes(secret!)).ComputeTotp(DateTime.UtcNow.AddSeconds(30));
+            var verifiedLogin = await client.PostAsJsonAsync("/api/v1/auth/login", new { credentials.email, credentials.password, code, credentials.device });
+            Assert.Equal(HttpStatusCode.OK, verifiedLogin.StatusCode);
+            grant = await verifiedLogin.Content.ReadFromJsonAsync<JsonElement>();
+            client.DefaultRequestHeaders.Authorization = new("Bearer", grant.GetProperty("accessToken").GetString());
+            client.DefaultRequestHeaders.Remove("X-CSRF-Token");
+            client.DefaultRequestHeaders.Add("X-CSRF-Token", grant.GetProperty("csrfToken").GetString());
+            var members = await client.GetFromJsonAsync<JsonElement>($"/api/v1/workspaces/{workspaceId}/members");
+            Assert.Equal(email, members[0].GetProperty("email").GetString());
+            var userId = members[0].GetProperty("userId").GetGuid();
+            Assert.Equal(HttpStatusCode.Conflict, (await client.PatchAsJsonAsync($"/api/v1/workspaces/{workspaceId}/members/{userId}", new { role = 2, active = true })).StatusCode);
+            Assert.Equal(HttpStatusCode.Created, (await client.PostAsJsonAsync("/api/v1/workspaces/", new {name="Verified workspace"})).StatusCode);
             client.DefaultRequestHeaders.Remove("Origin");
             client.DefaultRequestHeaders.Add("Origin", "https://attacker.invalid");
             Assert.Equal(HttpStatusCode.Forbidden, (await client.PostAsync("/api/v1/auth/refresh", null)).StatusCode);
@@ -100,3 +134,5 @@ public sealed class AuthHttpTests
         }
     }
 }
+
+

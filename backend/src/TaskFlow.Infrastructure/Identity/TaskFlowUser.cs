@@ -8,6 +8,7 @@ public sealed class TaskFlowUser : IdentityUser<Guid>
     public bool Active { get; set; } = true;
     public bool InstanceAdmin { get; set; }
     public DateTimeOffset CreatedAt { get; set; }
+    public Guid AuthenticatorGeneration { get; set; } = Guid.NewGuid();
 }
 public sealed class RefreshSession
 {

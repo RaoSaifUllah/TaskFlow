@@ -13,7 +13,11 @@ public sealed class TaskFlowDbContext(DbContextOptions<TaskFlowDbContext> option
     public DbSet<RefreshSession> RefreshSessions => Set<RefreshSession>();
     public DbSet<RefreshToken> RefreshTokens => Set<RefreshToken>();
     public DbSet<RecoveryCode> RecoveryCodes => Set<RecoveryCode>();
+    public DbSet<AuthenticatorUse> AuthenticatorUses => Set<AuthenticatorUse>();
+    public DbSet<AccountChallenge> AccountChallenges => Set<AccountChallenge>();
+    public DbSet<TaskFlow.Domain.Operations.AuditEvent> AuditEvents => Set<TaskFlow.Domain.Operations.AuditEvent>();
     public DbSet<Workspace> Workspaces => Set<Workspace>();
+    public DbSet<WorkspaceInvite> WorkspaceInvites => Set<WorkspaceInvite>();
     public DbSet<Membership> Memberships => Set<Membership>();
     public DbSet<Project> Projects => Set<Project>();
     public DbSet<ProjectShare> ProjectShares => Set<ProjectShare>();
@@ -22,12 +26,35 @@ public sealed class TaskFlowDbContext(DbContextOptions<TaskFlowDbContext> option
     protected override void OnModelCreating(ModelBuilder model)
     {
         base.OnModelCreating(model);
+        model.Entity<AuthenticatorUse>(e=>
+        {
+            e.HasKey(x=>new {x.UserId,x.Generation,x.Step});
+            e.HasOne<TaskFlowUser>().WithMany().HasForeignKey(x=>x.UserId).OnDelete(DeleteBehavior.Restrict);
+        });
+        model.Entity<TaskFlow.Domain.Operations.AuditEvent>(e =>
+        {
+            e.HasKey(x=>x.Id); e.Property(x=>x.Action).HasMaxLength(80);
+            e.HasIndex(x=>new {x.WorkspaceId,x.CreatedAt});
+        });
+        model.Entity<AccountChallenge>(e =>
+        {
+            e.HasKey(x => x.Hash); e.Property(x => x.Hash).HasMaxLength(64); e.Property(x => x.SecurityStamp).HasMaxLength(100);
+            e.HasOne<TaskFlowUser>().WithMany().HasForeignKey(x => x.UserId).OnDelete(DeleteBehavior.Restrict);
+            e.HasIndex(x => new { x.UserId, x.Purpose });
+        });
+        model.Entity<WorkspaceInvite>(e =>
+        {
+            e.HasKey(x => x.Id); e.HasIndex(x => x.TokenHash).IsUnique();
+            e.Property(x => x.TokenHash).HasMaxLength(64); e.Property(x => x.NormalizedEmail).HasMaxLength(254);
+            e.HasOne<Membership>().WithMany().HasForeignKey(x => new { x.WorkspaceId, UserId = x.CreatedBy }).OnDelete(DeleteBehavior.Restrict);
+            e.ToTable("WorkspaceInvites", t => t.HasCheckConstraint("CK_Invite_Role", "\"Role\" BETWEEN 0 AND 3"));
+        });
         model.Entity<RecoveryCode>(e =>
         {
             e.HasKey(x => new { x.UserId, x.Hash }); e.Property(x => x.Hash).HasMaxLength(64);
             e.HasOne<TaskFlowUser>().WithMany().HasForeignKey(x => x.UserId).OnDelete(DeleteBehavior.Restrict);
         });
-        model.Entity<TaskFlowUser>(e => { e.Property(x => x.TimeZone).HasMaxLength(100); });
+        model.Entity<TaskFlowUser>(e => { e.Property(x => x.TimeZone).HasMaxLength(100); e.Property(x=>x.AuthenticatorGeneration).HasDefaultValueSql("gen_random_uuid()"); });
         model.Entity<RefreshSession>(e =>
         {
             e.HasKey(x => x.Id);
@@ -43,11 +70,13 @@ public sealed class TaskFlowDbContext(DbContextOptions<TaskFlowDbContext> option
             e.HasOne<RefreshSession>().WithMany().HasForeignKey(x => x.SessionId).OnDelete(DeleteBehavior.Restrict);
             e.HasIndex(x => x.SessionId);
         });
-        model.Entity<Workspace>(e => { e.HasKey(x => x.Id); e.Property(x => x.Name).HasMaxLength(120); });
+        model.Entity<Workspace>(e => { e.HasKey(x => x.Id); e.Property(x => x.Name).HasMaxLength(120); e.Property(x => x.Version).IsConcurrencyToken().HasDefaultValue(1L); });
         model.Entity<Membership>(e =>
         {
             e.HasKey(x => new { x.WorkspaceId, x.UserId });
             e.HasOne<Workspace>().WithMany().HasForeignKey(x => x.WorkspaceId).OnDelete(DeleteBehavior.Restrict);
+            e.HasOne<TaskFlowUser>().WithMany().HasForeignKey(x => x.UserId).OnDelete(DeleteBehavior.Restrict);
+            e.ToTable("Memberships", t => t.HasCheckConstraint("CK_Membership_Role", "\"Role\" BETWEEN 0 AND 3"));
         });
         model.Entity<Project>(e =>
         {
@@ -78,4 +107,6 @@ public sealed class TaskFlowDbContext(DbContextOptions<TaskFlowDbContext> option
             e.HasOne<Membership>().WithMany().HasForeignKey(x => new { x.WorkspaceId, UserId = x.InboxOwnerId }).OnDelete(DeleteBehavior.Restrict);
         });
     }
+    public void Audit(string action, Guid? actor, Guid resource, DateTimeOffset now, Guid? workspace = null) =>
+        AuditEvents.Add(new TaskFlow.Domain.Operations.AuditEvent { Action=action, ActorId=actor, ResourceId=resource, CreatedAt=now, WorkspaceId=workspace });
 }

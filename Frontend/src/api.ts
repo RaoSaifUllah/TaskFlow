@@ -10,7 +10,7 @@ async function decode<T>(response: Response): Promise<T> {
     const problem = await response.json().catch(() => ({})) as { code?: string };
     throw new ApiError(response.status, problem.code ?? 'service_unavailable');
   }
-  return response.status === 204 ? undefined as T : response.json() as Promise<T>;
+  return response.status === 204 || response.status === 202 ? undefined as T : response.json() as Promise<T>;
 }
 async function csrf(): Promise<string> {
   return (await decode<{ csrfToken: string }>(await fetch('/api/v1/auth/csrf', { credentials: 'include' }))).csrfToken;
@@ -22,9 +22,14 @@ async function authPost<T>(path: string, body?: unknown): Promise<T> {
 }
 function accept(grant: Grant): AuthUser { accessToken = grant.accessToken; return grant.user; }
 export const auth = {
+  forget(): void { accessToken=null; },
+  async requestReset(email: string): Promise<void> { await authPost('reset/request',{email}); },
+  async reset(token: string,password: string): Promise<void> { await authPost('reset/confirm',{token,password}); accessToken=null; },
+  async verify(token: string): Promise<void> { await authPost('verification/confirm',{token}); },
   async login(email: string, password: string, code: string): Promise<AuthUser> {
     return accept(await authPost<Grant>('login', { email, password, code: code.replace(/[\s-]/g, '').toUpperCase() || null, device: 'Web browser' }));
   },
+  async register(token: string, email: string, password: string, timeZone: string): Promise<void> { await authPost('register', { token, email, password, timeZone }); },
   async bootstrap(email: string, password: string, token: string, workspaceName: string, timeZone: string): Promise<void> {
     await authPost('bootstrap', { email, password, token, workspaceName, timeZone });
   },
@@ -53,3 +58,5 @@ export async function api<T>(path: string, options: RequestInit = {}, retry = tr
   if (response.status === 401 && retry && await auth.restore()) return api<T>(path, options, false);
   return decode<T>(response);
 }
+
+

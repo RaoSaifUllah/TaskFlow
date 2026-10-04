@@ -17,3 +17,5 @@ disabled. Template test package versions are pinned and compatibility checked
 by actual restore/build/test; latest-release checks for test tooling remain pending.
 Installed Node 24.11.0 is compatible with the chosen frontend package engines;
 the newest supported Node 24 LTS patch is recommended for CI/production.
+
+2026-10-04: Otp.NET 1.4.1 stable rechecked using official NuGet metadata; promoted from test-only interoperability to production matched-step detection for the Identity TOTP replay guard. Updated NuGet lockfiles; see ADR-009.

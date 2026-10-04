@@ -51,8 +51,8 @@ overflow; it does not verify any future authentication/task journey.
 ## Safety and release
 No live notification providers exist in the foundation. Future development
 uses local mocks; external email/push/webhook delivery requires owner consent.
-No Git remote is configured. Request the repository URL before configuring one.
-AGPL-3.0-only remains a proposal; do not publish until the owner confirms it.
+The owner-configured remote is https://github.com/RaoSaifUllah/TaskFlow.git. Run checks locally and push directly with Git; GitHub Actions is disabled.
+The owner confirmed AGPL-3.0-only. Application deployment still requires authorization.
 
 ## Local appsettings
 Copy backend/src/TaskFlow.Api/appsettings.example.json to appsettings.Development.json
@@ -72,3 +72,35 @@ Use separate roles for API writes and reviewed Dapper reads; a Neon owner role
 is not a valid read-only connection. Use a direct connection for migrations and
 an isolated disposable database/branch for rollback tests. Neon test provisioning
 remains pending; do not run rollback SQL against a shared database.
+
+
+## Auth and workspace setup (Phase 2)
+Run from the TaskFlow root. Put the dedicated owner connection under
+`ConnectionStrings:DefaultConnection` (or Migration) in the ignored API development
+settings, then run the DbTool with `initialize` once. It generates restricted Write,
+Read, TestMigration and TestRead values. The API and Worker use restricted roles;
+the owner connection is operational only and must not be a runtime read credential.
+Use `refresh-grants` after additive migrations; `verify-test-migrations` resets
+ONLY the validated disposable test database and verifies up/down/up.
+
+`dotnet run --project backend/tools/TaskFlow.DbTool -- backend/src/TaskFlow.Api/appsettings.Development.json auth-setup`
+prepares local RSA-3072/bootstrap/Data Protection paths, preserving existing keys.
+The bootstrap key is saved in the ignored file and is never printed. Set Auth:Origin
+to the exact frontend origin. Owner/admin account enrollment is required before
+member directories and privileged actions; membership changes require a fresh code
+within five minutes. Revoke device sessions from Workspace and sessions.
+
+Invitations default to manual private sharing: an authorized inviter receives
+one token, expiring in seven days. New users choose Join with an invitation;
+existing users sign in and accept under settings. Revoked/demoted inviters withdraw
+outstanding grants. Invite possession confirms the matching email address.
+
+Reset tokens expire in 30 minutes, verification in 24 hours. New requests supersede
+older unused tokens; reset changes the security stamp and revokes all sessions.
+The local account delivery mock writes sensitive JSON under the ignored
+Auth:MockDeliveryDirectory (normally .local/account-mail). This is a developer mock,
+not a real email sender or durable production email queue. Read these files locally
+only for provider testing; never commit or publish them. Durable delivery/cleanup
+and retention are pending Phase 5/7. No real SMTP/push/webhook is configured.
+
+Authenticator codes are single-use across enrollment/login/step-up. Wait for a new code after enrollment or login; account lockout applies to failed MFA checks. See ADR-009. Runtime audit and authenticator-use records cannot be updated/deleted by the application role. Retention requires an operational policy (Phase 7).

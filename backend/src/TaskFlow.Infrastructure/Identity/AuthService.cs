@@ -8,7 +8,7 @@ using TaskFlow.Infrastructure.Persistence;
 
 namespace TaskFlow.Infrastructure.Identity;
 
-public sealed class AuthService(TaskFlowDbContext db, UserManager<TaskFlowUser> users, JwtIssuer jwt, TimeProvider clock) : IAuthService
+public sealed class AuthService(TaskFlowDbContext db, UserManager<TaskFlowUser> users, JwtIssuer jwt, TimeProvider clock, AuthenticatorReplayGuard otp) : IAuthService
 {
     public static string NewOpaqueToken() => Base64UrlEncoder.Encode(RandomNumberGenerator.GetBytes(32));
     public static string Hash(string value) => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value)));
@@ -26,7 +26,7 @@ public sealed class AuthService(TaskFlowDbContext db, UserManager<TaskFlowUser> 
         if (!user.Active || await users.IsLockedOutAsync(user)) return null;
         if (!await users.CheckPasswordAsync(user, password))
         { await users.AccessFailedAsync(user); await transaction.CommitAsync(cancellationToken); return null; }
-        if (user.TwoFactorEnabled && (totp is null || totp.Length > 64 || !await users.VerifyTwoFactorTokenAsync(user, TokenOptions.DefaultAuthenticatorProvider, totp)))
+        if (user.TwoFactorEnabled && !await otp.ConsumeAsync(user,totp,cancellationToken))
         {
             if (totp is null || totp.Length != 32 || await db.RecoveryCodes.Where(x => x.UserId == user.Id && x.Hash == Hash(totp) && x.UsedAt == null)
                 .ExecuteUpdateAsync(update => update.SetProperty(x => x.UsedAt, clock.GetUtcNow()), cancellationToken) != 1)
@@ -52,6 +52,7 @@ public sealed class AuthService(TaskFlowDbContext db, UserManager<TaskFlowUser> 
         };
         db.RefreshSessions.Add(session);
         db.RefreshTokens.Add(new RefreshToken { Hash = Hash(refresh), SessionId = session.Id, CreatedAt = now });
+        db.Audit("session_created",user.Id,session.Id,now);
         await db.SaveChangesAsync(cancellationToken);
         await transaction.CommitAsync(cancellationToken);
         return Grant(user, session, refresh, csrf, now);
@@ -70,6 +71,7 @@ public sealed class AuthService(TaskFlowDbContext db, UserManager<TaskFlowUser> 
         if (token.ConsumedAt is not null)
         {
             session.RevokedAt = now;
+            db.Audit("refresh_replay_revoked",session.UserId,session.Id,now);
             await db.SaveChangesAsync(cancellationToken);
             await transaction.CommitAsync(cancellationToken);
             return null;
@@ -85,9 +87,15 @@ public sealed class AuthService(TaskFlowDbContext db, UserManager<TaskFlowUser> 
         await transaction.CommitAsync(cancellationToken);
         return Grant(user, session, next, csrf, now);
     }
-    public async Task RevokeAsync(Guid userId, Guid sessionId, CancellationToken cancellationToken) =>
-        await db.RefreshSessions.Where(x => x.UserId == userId && x.Id == sessionId && x.RevokedAt == null)
-            .ExecuteUpdateAsync(update => update.SetProperty(x => x.RevokedAt, clock.GetUtcNow()), cancellationToken);
+    public async Task RevokeAsync(Guid userId, Guid sessionId, CancellationToken cancellationToken)
+    {
+        await using var transaction=await db.Database.BeginTransactionAsync(cancellationToken);
+        var now=clock.GetUtcNow();
+        var count=await db.RefreshSessions.Where(x=>x.UserId==userId && x.Id==sessionId && x.RevokedAt==null)
+            .ExecuteUpdateAsync(update=>update.SetProperty(x=>x.RevokedAt,now),cancellationToken);
+        if(count==1) {db.Audit("session_revoked",userId,sessionId,now);await db.SaveChangesAsync(cancellationToken);}
+        await transaction.CommitAsync(cancellationToken);
+    }
 
     public Task<bool> ValidateSessionAsync(Guid userId, Guid sessionId, CancellationToken cancellationToken)
     {

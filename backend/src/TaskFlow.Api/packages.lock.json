@@ -254,6 +254,11 @@
           "Npgsql": "10.0.3"
         }
       },
+      "Otp.NET": {
+        "type": "Transitive",
+        "resolved": "1.4.1",
+        "contentHash": "UXjZ80T6BfVACJWmEcz4UFZ93hwX3STKojKvVpPk3qUhubjnLwIiZMsI4Hh91HhYxC0JlatNdNrVK2wkv4O9/Q=="
+      },
       "System.CodeDom": {
         "type": "Transitive",
         "resolved": "6.0.0",
@@ -334,6 +339,7 @@
           "Microsoft.EntityFrameworkCore": "[10.0.12, )",
           "Microsoft.EntityFrameworkCore.Design": "[10.0.12, )",
           "Npgsql.EntityFrameworkCore.PostgreSQL": "[10.0.3, )",
+          "Otp.NET": "[1.4.1, )",
           "System.IdentityModel.Tokens.Jwt": "[8.23.0, )",
           "TaskFlow.Application": "[1.0.0, )"
         }

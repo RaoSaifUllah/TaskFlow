@@ -37,6 +37,13 @@ public sealed class FoundationTests
                     OR has_table_privilege(current_user, quote_ident(schemaname) || '.' || quote_ident(tablename), 'DELETE')))
             """, read);
         Assert.False((bool)(await privileges.ExecuteScalarAsync())!, "Read connection must use a separate SELECT-only role without CREATE or role/database administration privileges.");
+        await using var secrets = new NpgsqlCommand("""
+            SELECT has_table_privilege(current_user, '"AspNetUsers"', 'SELECT')
+                OR has_table_privilege(current_user, '"WorkspaceInvites"', 'SELECT')
+                OR has_table_privilege(current_user, '"AccountChallenges"', 'SELECT')
+                OR has_table_privilege(current_user, '"AuditEvents"', 'SELECT')
+            """,read);
+        Assert.False((bool)(await secrets.ExecuteScalarAsync())!,"Projection role must not expose identity, invite/reset credentials or operational audit records.");
     }
     [PostgreSqlFact]
     public async Task MigrationsIsolationConcurrencyAndRestrictedReads()
@@ -50,6 +57,8 @@ public sealed class FoundationTests
         var other = new Workspace("Other " + Guid.NewGuid());
         var owner = Guid.NewGuid();
         var member = Guid.NewGuid();
+        db.AddRange(new TaskFlow.Infrastructure.Identity.TaskFlowUser { Id = owner, Email = owner + "@example.invalid" },
+            new TaskFlow.Infrastructure.Identity.TaskFlowUser { Id = member, Email = member + "@example.invalid" });
         db.AddRange(workspace, other,
             new Membership { WorkspaceId = workspace.Id, UserId = owner, Role = WorkspaceRole.Owner },
             new Membership { WorkspaceId = workspace.Id, UserId = member, Role = WorkspaceRole.Member },

@@ -3,6 +3,7 @@ using System.Text;
 using System.Security.Claims;
 using TaskFlow.Application.Identity;
 using TaskFlow.Infrastructure.Identity;
+using TaskFlow.Application.Workspaces;
 
 namespace TaskFlow.Api.Identity;
 
@@ -13,6 +14,29 @@ public static class AuthEndpoints
     public static void MapAuth(this WebApplication app)
     {
         var group = app.MapGroup("/api/v1/auth");
+        group.MapPost("/reset/request", async (EmailRequest request, IAccountLifecycle lifecycle, HttpContext context, IConfiguration configuration, CancellationToken ct) =>
+        {
+            if (!CookieMutationAllowed(context, configuration)) return Error(403, "csrf_rejected");
+            await lifecycle.RequestResetAsync(request.Email, ct); return Results.Accepted();
+        }).RequireRateLimiting("auth");
+        group.MapPost("/reset/confirm", async (ResetRequest request, IAccountLifecycle lifecycle, HttpContext context, IConfiguration configuration, CancellationToken ct) =>
+        {
+            if (!CookieMutationAllowed(context, configuration)) return Error(403, "csrf_rejected");
+            if (!await lifecycle.ResetAsync(request.Token, request.Password, ct)) return Error(400, "challenge_rejected");
+            ClearCookies(context); return Results.NoContent();
+        }).RequireRateLimiting("auth");
+        group.MapPost("/verification/request", async (IAccountLifecycle lifecycle, HttpContext context, CancellationToken ct) =>
+        { await lifecycle.RequestVerificationAsync(UserId(context.User), ct); return Results.Accepted(); }).RequireAuthorization().RequireRateLimiting("auth");
+        group.MapPost("/verification/confirm", async (TokenRequest request, IAccountLifecycle lifecycle, HttpContext context, IConfiguration configuration, CancellationToken ct) =>
+        {
+            if (!CookieMutationAllowed(context, configuration)) return Error(403, "csrf_rejected");
+            return await lifecycle.VerifyAsync(request.Token, ct) ? Results.NoContent() : Error(400, "challenge_rejected");
+        }).RequireRateLimiting("auth");
+        group.MapPost("/register", async (InviteRegistration request, IInviteService invites, HttpContext context, IConfiguration configuration, CancellationToken ct) =>
+        {
+            if (!CookieMutationAllowed(context, configuration)) return Error(403, "csrf_rejected");
+            return await invites.RegisterAsync(request, ct) ? Results.NoContent() : Error(400, "registration_rejected");
+        }).RequireRateLimiting("auth");
         group.MapGet("/csrf", (HttpContext context) =>
         {
             var csrf = context.Request.Cookies[CsrfCookie];
@@ -104,4 +128,7 @@ public static class AuthEndpoints
     public sealed record LoginRequest(string Email, string Password, string? Code, string Device);
     public sealed record PasswordRequest(string Password);
     public sealed record CodeRequest(string Code);
+    public sealed record EmailRequest(string Email);
+    public sealed record ResetRequest(string Token, string Password);
+    public sealed record TokenRequest(string Token);
 }

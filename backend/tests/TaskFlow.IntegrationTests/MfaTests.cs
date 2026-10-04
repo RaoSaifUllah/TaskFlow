@@ -48,13 +48,27 @@ public sealed class MfaTests
             Assert.NotEqual(secret, stored.Value);
             Assert.True(await auth.ValidateSessionAsync(user.Id, sessionId, default));
             var code = new Totp(Base32Encoding.ToBytes(secret)).ComputeTotp(DateTime.UtcNow);
-            var recovery = await account.ConfirmMfaAsync(user.Id, code, default);
+            async Task<IReadOnlyList<string>?> Confirm()
+            {
+                await using var concurrent = provider.CreateAsyncScope();
+                return await concurrent.ServiceProvider.GetRequiredService<IAccountService>().ConfirmMfaAsync(user.Id, code, default);
+            }
+            var enrollments = await Task.WhenAll(Confirm(), Confirm());
+            Assert.Single(enrollments, value => value is not null);
+            var recovery = enrollments.Single(value => value is not null);
             Assert.NotNull(recovery); Assert.Equal(10, recovery.Count);
             Assert.False(await auth.ValidateSessionAsync(user.Id, sessionId, default));
             Assert.Null(await auth.LoginAsync(user.Email, "synthetic MFA passphrase", null, "MFA fixture", default));
-            var totpGrant = await auth.LoginAsync(user.Email, "synthetic MFA passphrase", code, "MFA fixture", default);
+            Assert.Null(await auth.LoginAsync(user.Email, "synthetic MFA passphrase", code, "Enrollment code replay", default));
+            var freshCode=new Totp(Base32Encoding.ToBytes(secret)).ComputeTotp(DateTime.UtcNow.AddSeconds(30));
+            async Task<AuthGrant?> LoginFresh() {await using var concurrent=provider.CreateAsyncScope();return await concurrent.ServiceProvider.GetRequiredService<IAuthService>().LoginAsync(user.Email,"synthetic MFA passphrase",freshCode,"OTP race",default);}
+            var loginResults=await Task.WhenAll(LoginFresh(),LoginFresh());
+            Assert.Single(loginResults,value=>value is not null);
+            var totpGrant=loginResults.Single(value=>value is not null);
             Assert.NotNull(totpGrant);
-            Assert.True(totpGrant.User.MfaEnabled);
+            Assert.True(totpGrant!.User.MfaEnabled);
+            var otpSession=(await db.RefreshTokens.SingleAsync(x=>x.Hash==AuthService.Hash(totpGrant.RefreshToken))).SessionId;
+            Assert.False(await account.StepUpAsync(user.Id,otpSession,freshCode,default));
             Assert.DoesNotContain(await db.RecoveryCodes.Where(x => x.UserId == user.Id).Select(x => x.Hash).ToArrayAsync(), x => recovery.Contains(x));
             var recovered = await auth.LoginAsync(user.Email, "synthetic MFA passphrase", recovery[0], "Recovery fixture", default);
             Assert.NotNull(recovered); Assert.False(recovered.User.MfaEnabled);
@@ -74,3 +88,4 @@ public sealed class MfaTests
         }
     }
 }
+

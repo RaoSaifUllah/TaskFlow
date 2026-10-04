@@ -11,8 +11,28 @@ var mode = args.Length > 1 ? args[1] : "probe";
 try
 {
     var settings = JsonNode.Parse(await File.ReadAllTextAsync(settingsPath))!;
+    if (mode == "auth-setup")
+    {
+        var directory = Path.GetFullPath(Path.Combine(".local", "auth"));
+        Directory.CreateDirectory(directory);
+        var auth = settings["Auth"] ??= new JsonObject();
+        var keyPath = auth["SigningKeyPath"]?.GetValue<string>() ?? Path.Combine(directory, "signing.pem");
+        if (!File.Exists(keyPath))
+        {
+            using var rsa = RSA.Create(3072);
+            await File.WriteAllTextAsync(keyPath, rsa.ExportRSAPrivateKeyPem());
+        }
+        auth["SigningKeyPath"] = keyPath;
+        auth["DataProtectionKeyDirectory"] ??= Path.Combine(directory, "protection");
+        auth["MockDeliveryDirectory"] ??= Path.GetFullPath(Path.Combine(".local", "account-mail"));
+        auth["BootstrapToken"] ??= Convert.ToHexString(RandomNumberGenerator.GetBytes(32));
+        auth["Origin"] ??= "http://127.0.0.1:5173";
+        await SaveAsync(settingsPath, settings);
+        Console.WriteLine("Local RSA signing/bootstrap/protection/mock-delivery settings prepared. Existing keys preserved; secrets not printed.");
+        return;
+    }
     var strings = settings["ConnectionStrings"]!;
-    var configured = strings["Migration"]?.GetValue<string>() ?? strings["Write"]!.GetValue<string>();
+    var configured = strings["Migration"]?.GetValue<string>() ?? strings["DefaultConnection"]?.GetValue<string>() ?? strings["Write"]!.GetValue<string>();
     var owner = new NpgsqlConnectionStringBuilder(DatabaseConnections.Normalize(configured));
     if (owner.Host?.EndsWith(".neon.tech", StringComparison.OrdinalIgnoreCase) == true)
         owner.Host = owner.Host.Replace("-pooler.", ".", StringComparison.Ordinal);
@@ -38,6 +58,8 @@ try
             test.Database != testName || test.Host != owner.Host || test.Database == owner.Database)
             throw new InvalidOperationException("Refusing rollback outside the provisioned isolated test database.");
         await using var testContext = new TaskFlowDbContext(new DbContextOptionsBuilder<TaskFlowDbContext>().UseNpgsql(test.ConnectionString).Options);
+        // Reset the authorized disposable fixture before applying new integrity constraints.
+        await testContext.GetService<IMigrator>().MigrateAsync("0");
         await testContext.Database.MigrateAsync();
         await testContext.GetService<IMigrator>().MigrateAsync("0");
         await MigrateAndGrantAsync(test.ConnectionString, settings["Provisioning"]!["TestReadRole"]!.GetValue<string>(), null);
@@ -104,11 +126,17 @@ static async Task MigrateAndGrantAsync(string connectionString, string readRole,
     await ExecuteAsync(connection, $"GRANT USAGE ON SCHEMA public TO {Quote(readRole)}");
     var tables = string.Join(", ", new[] { "Workspaces", "Memberships", "Projects", "ProjectShares", "Tasks" }.Select(Quote));
     await ExecuteAsync(connection, $"GRANT SELECT ON {tables} TO {Quote(readRole)}");
+    await ExecuteAsync(connection, $"GRANT SELECT ON \"AccountDirectory\" TO {Quote(readRole)}");
     if (writeRole is not null)
     {
         await ExecuteAsync(connection, $"GRANT CONNECT ON DATABASE {Quote(database)} TO {Quote(writeRole)}");
         await ExecuteAsync(connection, $"GRANT USAGE ON SCHEMA public TO {Quote(writeRole)}");
-        var writeTables = tables + ", " + string.Join(", ", new[] { "AspNetUsers", "AspNetRoles", "AspNetUserRoles", "AspNetUserClaims", "AspNetUserLogins", "AspNetUserTokens", "AspNetRoleClaims", "RefreshSessions", "RefreshTokens", "RecoveryCodes" }.Select(Quote));
+        var writeTables = tables + ", " + string.Join(", ", new[] { "AspNetUsers", "AspNetRoles", "AspNetUserRoles", "AspNetUserClaims", "AspNetUserLogins", "AspNetUserTokens", "AspNetRoleClaims", "RefreshSessions", "RefreshTokens", "RecoveryCodes", "WorkspaceInvites", "AccountChallenges" }.Select(Quote));
         await ExecuteAsync(connection, $"GRANT SELECT, INSERT, UPDATE, DELETE ON {writeTables} TO {Quote(writeRole)}");
+        await ExecuteAsync(connection,$"REVOKE UPDATE, DELETE ON \"AuditEvents\", \"AuthenticatorUses\" FROM {Quote(writeRole)}; GRANT SELECT, INSERT ON \"AuditEvents\", \"AuthenticatorUses\" TO {Quote(writeRole)}");
     }
 }
+
+
+
+

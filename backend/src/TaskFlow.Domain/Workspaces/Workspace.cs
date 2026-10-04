@@ -5,6 +5,8 @@ public sealed class Workspace
 {
     public Guid Id { get; private set; } = Guid.NewGuid();
     public string Name { get; private set; } = "";
+    public long Version { get; private set; } = 1;
+    public DateTimeOffset? DeletedAt { get; private set; }
     private Workspace() { }
     public Workspace(string name)
     {
@@ -12,6 +14,12 @@ public sealed class Workspace
             throw new ArgumentException("Workspace name must contain 1–120 characters.", nameof(name));
         Name = name.Trim();
     }
+    public void Rename(string name)
+    {
+        if (string.IsNullOrWhiteSpace(name) || name.Trim().Length > 120) throw new ArgumentException("Workspace name must contain 1–120 characters.", nameof(name));
+        Name = name.Trim(); Version++;
+    }
+    public void Delete(DateTimeOffset now) { DeletedAt = now; Version++; }
 }
 public sealed class Membership
 {
